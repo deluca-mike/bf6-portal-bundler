@@ -1,0 +1,28 @@
+{
+    "name": "bf6-portal-bundler",
+    "version": "1.0.0",
+    "description": "Bundler for Battlefield 6 Portal mods",
+    "main": "index.js",
+    "bin": {
+        "bf6-portal-bundler": "./index.js"
+    },
+    "scripts": {
+        "prettier": "prettier --write ./src/**/*.ts ./src/*.ts"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/deluca-mike/bf6-portal-bundler.git"
+    },
+    "author": "Michael De Luca",
+    "license": "MIT",
+    "bugs": {
+        "url": "https://github.com/deluca-mike/bf6-portal-bundler/issues"
+    },
+    "homepage": "https://github.com/deluca-mike/bf6-portal-bundler#readme",
+    "dependencies": {
+        "eslint": "^9.39.1",
+        "fs-extra": "^11.3.2",
+        "glob": "^13.0.0",
+        "prettier": "^3.7.4"
+    }
+}
