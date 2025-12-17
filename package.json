@@ -1,10 +1,10 @@
 {
     "name": "bf6-portal-bundler",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "description": "Bundler for Battlefield 6 Portal mods",
     "main": "index.js",
     "bin": {
-        "bf6-portal-bundler": "./index.js"
+        "bf6-portal-bundler": "index.js"
     },
     "scripts": {
         "prettier": "prettier --write ./src/**/*.ts ./src/*.ts"

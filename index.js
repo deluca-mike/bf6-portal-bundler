@@ -177,6 +177,7 @@ function build() {
 
     // Process Strings
     const finalStrings = processStrings();
+    fs.mkdirSync(path.dirname(OUTPUT_STRINGS_FILE), { recursive: true });
     fs.writeFileSync(OUTPUT_STRINGS_FILE, JSON.stringify(finalStrings, null, 4));
 
     // Concatenate Content
