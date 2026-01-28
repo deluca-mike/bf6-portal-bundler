@@ -1,6 +1,7 @@
 # bf6-portal-bundler
 
-A specialized bundler for Battlefield 6 Portal mods that combines TypeScript files and string resources into a single bundle compatible with the Portal runtime environment.
+A specialized bundler for Battlefield 6 Portal mods that combines TypeScript files and string resources into a single
+bundle compatible with the Portal runtime environment.
 
 ## Overview
 
@@ -50,18 +51,20 @@ After global installation, you can run the bundler from any project without addi
 ### Command Line
 
 ```bash
-bf6-portal-bundler --entrypoint <path> --outDir <path>
+bf6-portal-bundler --entrypoint <path> --outDir <path> [--minify]
 ```
 
 **Arguments:**
 
 - `--entrypoint`: Path to your main TypeScript entry file (e.g., `./src/index.ts`)
 - `--outDir`: Output directory where `bundle.ts` and `bundle.strings.json` will be written
+- `--minify`: (optional) Apply rudimentary size reduction (see [Minification](#minification--minify))
 
 **Example:**
 
 ```bash
 bf6-portal-bundler --entrypoint ./src/index.ts --outDir ./dist
+bf6-portal-bundler --entrypoint ./src/index.ts --outDir ./dist --minify
 ```
 
 This will generate:
@@ -147,7 +150,7 @@ For each file in the dependency graph:
     - Type definitions
     - Classes, functions, variables
     - Exports
-    - Comments
+    - Comments (unless `--minify` is used; see [Minification](#minification--minify))
 
 3. **Adds source comments:**
     - Each file section is marked with `// --- SOURCE: <relative-path> ---`
@@ -222,6 +225,22 @@ You can use npm packages in your mod! The bundler will:
 - Clear error messages for missing files
 - Warnings for unresolved imports
 - Validation of JSON files
+
+### Minification (`--minify`)
+
+The bundler supports a **rudimentary** size-reduction mode via the `--minify` flag. When enabled, it:
+
+1. **Strips all comments** from the bundled TypeScript (single-line, multi-line, and JSDoc).
+2. **Removes blank lines** from the final output.
+3. **Reformats the bundle** with a compact Prettier configuration (e.g. wide line width, no semicolons, single quotes,
+   no trailing commas) to reduce character count.
+
+**This is not a true minifier.** The output remains **valid, human-readable TypeScript**, albeit a painful read. The BF6
+Portal upload and validation system imposes strict requirements on uploaded bundles; the bundle must be valid TypeScript
+that passes Portal’s checks. Aggressive minification (omitting types, variable shortening, name mangling, heavy
+whitespace removal, or other transforms used by tools like Terser or esbuild’s minify) could break validation or runtime
+behavior. The `--minify` option only applies safe, semantics-preserving reductions to help shrink bundle size while
+keeping the result valid and compliant.
 
 ## Output Format
 

@@ -2,6 +2,25 @@
 
 const fs = require('fs');
 const path = require('path');
+const stripComments = require('strip-comments');
+const prettier = require('@prettier/sync');
+const removeBlankLines = require('remove-blank-lines');
+
+const PRETTIER_CONFIG = {
+    parser: 'typescript',
+    printWidth: 1000,
+    tabWidth: 0,
+    useTabs: false,
+    semi: false,
+    singleQuote: true,
+    quoteProps: 'as-needed',
+    trailingComma: 'none',
+    bracketSpacing: false,
+    objectWrap: 'preserve',
+    arrowParens: 'avoid',
+    proseWrap: 'never',
+    endOfLine: 'lf',
+};
 
 // --- CONFIGURATION ---
 const EXTERNAL_MODULES = ['mod']; // Modules to IGNORE (remote env provides them)
@@ -11,12 +30,21 @@ function parseArgs() {
     const args = process.argv.slice(2);
     let entrypoint = null;
     let outDir = null;
+    let minify = false;
 
     for (let i = 0; i < args.length; i++) {
         if (args[i] === '--entrypoint' && i + 1 < args.length) {
             entrypoint = args[++i];
         } else if (args[i] === '--outDir' && i + 1 < args.length) {
             outDir = args[++i];
+        } else if (args[i] === '--minify') {
+            // Support both `--minify` (flag) and `--minify true/false`
+            if (i + 1 < args.length && !args[i + 1].startsWith('--')) {
+                const val = String(args[++i]).toLowerCase();
+                minify = val === 'true' || val === '1' || val === 'yes';
+            } else {
+                minify = true;
+            }
         }
     }
 
@@ -35,11 +63,12 @@ function parseArgs() {
     // Base directory for resolving node_modules (user's project root, typically where package.json is)
     // We'll use the directory containing the entrypoint as a fallback, but prefer cwd
     const PROJECT_ROOT = cwd;
+    const MINIFY_OUTPUT = minify;
 
-    return { ENTRY_FILE, OUTPUT_FILE, OUTPUT_STRINGS_FILE, PROJECT_ROOT };
+    return { ENTRY_FILE, OUTPUT_FILE, OUTPUT_STRINGS_FILE, PROJECT_ROOT, MINIFY_OUTPUT };
 }
 
-const { ENTRY_FILE, OUTPUT_FILE, OUTPUT_STRINGS_FILE, PROJECT_ROOT } = parseArgs();
+const { ENTRY_FILE, OUTPUT_FILE, OUTPUT_STRINGS_FILE, PROJECT_ROOT, MINIFY_OUTPUT } = parseArgs();
 
 // Track processed files to avoid cycles and duplication
 const visited = new Set();
@@ -86,23 +115,39 @@ function walk(filePath) {
 
     visited.add(filePath);
 
-    const content = fs.readFileSync(filePath, 'utf8');
+    const rawContent = fs.readFileSync(filePath, 'utf8');
+    const cleanContent = stripComments(rawContent, { language: 'ts' });
 
     // Regex to find imports:
-    // Matches: import ... from 'path';  OR  import 'path';  OR  import ... = require('path');
-    const importRegex = /import\s+(?:[\s\S]*?from\s+|)(?:['"](.*?)['"])|import\s+[\s\S]*?=\s*require\(['"](.*?)['"]\)/g;
+    // We need to capture the path from 3 different styles of dependency declarations.
+    const patterns = [
+        // 1. Standard Imports/Exports (e.g., import { X } from "y"; export { X } from "y"; export * from "y")
+        //    Note: We enforce 'from' here to avoid matching "export class X..."
+        /(?:import|export)\s+[\s\S]*?from\s*['"](.*?)['"]/g,
 
-    let match;
+        // 2. Side-effect Imports (e.g., import "polyfills";)
+        //    Note: Must start with import, no 'from'
+        /import\s+['"](.*?)['"]/g,
 
-    while ((match = importRegex.exec(content)) !== null) {
-        const importPath = match[1] || match[2];
+        // 3. Import Require (e.g., import X = require("y"))
+        /import\s+[\s\S]*?=\s*require\(['"](.*?)['"]\)/g,
+    ];
 
-        if (!importPath) continue;
+    for (const regex of patterns) {
+        let match;
 
-        const absolutePath = resolveImport(importPath, path.dirname(filePath));
+        regex.lastIndex = 0; // Reset regex state just in case
 
-        // If it's a valid local/node file (not external), walk it FIRST
-        if (absolutePath && !absolutePath.endsWith('.d.ts')) {
+        while ((match = regex.exec(cleanContent)) !== null) {
+            const importPath = match[1]; // The path is always in the first capture group now
+
+            if (!importPath) continue;
+
+            const absolutePath = resolveImport(importPath, path.dirname(filePath));
+
+            if (!absolutePath || absolutePath.endsWith('.d.ts')) continue;
+
+            // If it's a valid local/node file (not external), walk it FIRST
             walk(absolutePath);
         }
     }
@@ -122,11 +167,11 @@ function processStrings() {
     const processedJsonFiles = new Set();
 
     // 1. Identify all directories involved in the build
-    const directories = new Set(buildOrder.map(f => path.dirname(f)));
+    const directories = new Set(buildOrder.map((f) => path.dirname(f)));
 
     for (const dir of directories) {
         // 2. Find any sibling files ending in "strings.json"
-        const files = fs.readdirSync(dir).filter(f => f.endsWith('strings.json'));
+        const files = fs.readdirSync(dir).filter((f) => f.endsWith('strings.json'));
 
         for (const jsonFilename of files) {
             const jsonPath = path.join(dir, jsonFilename);
@@ -181,14 +226,14 @@ function build() {
     fs.writeFileSync(OUTPUT_STRINGS_FILE, JSON.stringify(finalStrings, null, 4));
 
     // Concatenate Content
-    let finalOutput = [
-        '// --- BUNDLED TYPESCRIPT OUTPUT ---',
-        '// @ts-nocheck',
-        ''
-    ];
+    let finalOutput = ['// --- BUNDLED TYPESCRIPT OUTPUT ---', '// @ts-nocheck', ''];
 
     for (const filePath of buildOrder) {
         let content = fs.readFileSync(filePath, 'utf8');
+
+        if (MINIFY_OUTPUT) {
+            content = stripComments(content, { language: 'ts' });
+        }
 
         // --- CLEANUP REGEXES (The Fix) ---
 
@@ -213,12 +258,20 @@ function build() {
         finalOutput.push('');
     }
 
+    finalOutput = finalOutput.join('\n');
+
+    if (MINIFY_OUTPUT) {
+        finalOutput = removeBlankLines(prettier.format(finalOutput, PRETTIER_CONFIG));
+    }
+
     fs.mkdirSync(path.dirname(OUTPUT_FILE), { recursive: true });
-    fs.writeFileSync(OUTPUT_FILE, finalOutput.join('\n'));
+    fs.writeFileSync(OUTPUT_FILE, finalOutput);
 
     console.log(`\n✅ Build Complete!`);
     console.log(`   Code:    ${path.relative(PROJECT_ROOT, OUTPUT_FILE)}`);
-    console.log(`   Strings: ${path.relative(PROJECT_ROOT, OUTPUT_STRINGS_FILE)} (${Object.keys(finalStrings).length} keys merged)`);
+    console.log(
+        `   Strings: ${path.relative(PROJECT_ROOT, OUTPUT_STRINGS_FILE)} (${Object.keys(finalStrings).length} keys merged)`
+    );
 }
 
 build();
