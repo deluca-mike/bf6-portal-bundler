@@ -51,19 +51,22 @@ After global installation, you can run the bundler from any project without addi
 ### Command Line
 
 ```bash
-bf6-portal-bundler --entrypoint <path> --outDir <path> [--minify]
+bf6-portal-bundler --entrypoint <path> --outDir <path> [--removeComments] [--minify]
 ```
 
 **Arguments:**
 
 - `--entrypoint`: Path to your main TypeScript entry file (e.g., `./src/index.ts`)
 - `--outDir`: Output directory where `bundle.ts` and `bundle.strings.json` will be written
+- `--removeComments`: (optional) Strip all comments from the bundle without minifying (see
+  [Comment removal](#comment-removal--removecomments))
 - `--minify`: (optional) Apply rudimentary size reduction (see [Minification](#minification--minify))
 
 **Example:**
 
 ```bash
 bf6-portal-bundler --entrypoint ./src/index.ts --outDir ./dist
+bf6-portal-bundler --entrypoint ./src/index.ts --outDir ./dist --removeComments
 bf6-portal-bundler --entrypoint ./src/index.ts --outDir ./dist --minify
 ```
 
@@ -150,7 +153,8 @@ For each file in the dependency graph:
     - Type definitions
     - Classes, functions, variables
     - Exports
-    - Comments (unless `--minify` is used; see [Minification](#minification--minify))
+    - Comments (unless `--removeComments` or `--minify` is used; see [Comment removal](#comment-removal--removecomments)
+      and [Minification](#minification--minify))
 
 3. **Adds source comments:**
     - Each file section is marked with `// --- SOURCE: <relative-path> ---`
@@ -230,7 +234,7 @@ You can use npm packages in your mod! The bundler will:
 
 The bundler supports a **rudimentary** size-reduction mode via the `--minify` flag. When enabled, it:
 
-1. **Strips all comments** from the bundled TypeScript (single-line, multi-line, and JSDoc).
+1. **Strips all comments** from the bundled TypeScript (single-line, multi-line, and JSDoc)—same as `--removeComments`.
 2. **Removes blank lines** from the final output.
 3. **Reformats the bundle** with a compact Prettier configuration (e.g. wide line width, no semicolons, single quotes,
    no trailing commas) to reduce character count.
@@ -241,6 +245,12 @@ that passes Portal’s checks. Aggressive minification (omitting types, variable
 whitespace removal, or other transforms used by tools like Terser or esbuild’s minify) could break validation or runtime
 behavior. The `--minify` option only applies safe, semantics-preserving reductions to help shrink bundle size while
 keeping the result valid and compliant.
+
+### Comment removal (`--removeComments`)
+
+You can strip all comments (single-line, multi-line, and JSDoc) from the bundle **without** minifying. Use
+`--removeComments` when you want a smaller or cleaner bundle but prefer to keep the existing formatting and blank lines.
+Comment stripping is forced when you use `--minify`.
 
 ## Output Format
 

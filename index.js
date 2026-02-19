@@ -16,7 +16,7 @@ const PRETTIER_CONFIG = {
     quoteProps: 'as-needed',
     trailingComma: 'none',
     bracketSpacing: false,
-    objectWrap: 'preserve',
+    objectWrap: 'collapse',
     arrowParens: 'avoid',
     proseWrap: 'never',
     endOfLine: 'lf',
@@ -30,6 +30,7 @@ function parseArgs() {
     const args = process.argv.slice(2);
     let entrypoint = null;
     let outDir = null;
+    let removeComments = false;
     let minify = false;
 
     for (let i = 0; i < args.length; i++) {
@@ -37,6 +38,14 @@ function parseArgs() {
             entrypoint = args[++i];
         } else if (args[i] === '--outDir' && i + 1 < args.length) {
             outDir = args[++i];
+        } else if (args[i] === '--removeComments') {
+            // Support both `--removeComments` (flag) and `--removeComments true/false`
+            if (i + 1 < args.length && !args[i + 1].startsWith('--')) {
+                const val = String(args[++i]).toLowerCase();
+                removeComments = val === 'true' || val === '1' || val === 'yes';
+            } else {
+                removeComments = true;
+            }
         } else if (args[i] === '--minify') {
             // Support both `--minify` (flag) and `--minify true/false`
             if (i + 1 < args.length && !args[i + 1].startsWith('--')) {
@@ -63,12 +72,14 @@ function parseArgs() {
     // Base directory for resolving node_modules (user's project root, typically where package.json is)
     // We'll use the directory containing the entrypoint as a fallback, but prefer cwd
     const PROJECT_ROOT = cwd;
+    const REMOVE_COMMENTS_OUTPUT = removeComments;
     const MINIFY_OUTPUT = minify;
 
-    return { ENTRY_FILE, OUTPUT_FILE, OUTPUT_STRINGS_FILE, PROJECT_ROOT, MINIFY_OUTPUT };
+    return { ENTRY_FILE, OUTPUT_FILE, OUTPUT_STRINGS_FILE, PROJECT_ROOT, REMOVE_COMMENTS_OUTPUT, MINIFY_OUTPUT };
 }
 
-const { ENTRY_FILE, OUTPUT_FILE, OUTPUT_STRINGS_FILE, PROJECT_ROOT, MINIFY_OUTPUT } = parseArgs();
+const { ENTRY_FILE, OUTPUT_FILE, OUTPUT_STRINGS_FILE, PROJECT_ROOT, REMOVE_COMMENTS_OUTPUT, MINIFY_OUTPUT } =
+    parseArgs();
 
 // Track processed files to avoid cycles and duplication
 const visited = new Set();
@@ -231,7 +242,7 @@ function build() {
     for (const filePath of buildOrder) {
         let content = fs.readFileSync(filePath, 'utf8');
 
-        if (MINIFY_OUTPUT) {
+        if (REMOVE_COMMENTS_OUTPUT || MINIFY_OUTPUT) {
             content = stripComments(content, { language: 'ts' });
         }
 
