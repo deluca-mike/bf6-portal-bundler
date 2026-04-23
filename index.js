@@ -110,7 +110,7 @@ function resolveImport(importPath, currentFileDir) {
 
     // Check extensions
     for (const ext of extensions) {
-        const appended = targetPath + ext;
+        const appended = path.normalize(targetPath + ext);
 
         if (fs.existsSync(appended) && fs.statSync(appended).isFile()) return appended;
     }
