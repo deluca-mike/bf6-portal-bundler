@@ -21,20 +21,39 @@ import { createId as createIdF2 } from './functions/f2/nested/createId';
 import { acceptsI1Box } from './importStyles/inlineTypeImport';
 import { phaseLabel } from './importStyles/mixedImport';
 import { relayTags } from './delta/relay';
+import { readPrivateDupA } from './privateDup/a';
+import { readPrivateDupB } from './privateDup/b';
 import { metric as metricV1 } from './vars/v1/metric';
 import { metric as metricV2 } from './vars/v2/metric';
 import { metric as metricV3 } from './vars/v3/nested/metric';
 
-function useTypes(_a: WidgetA, _b: WidgetB, _c: BoxI1, _d: BoxI2): void {}
+const DUPLICATE_PRIVATE_TOP_LEVEL = 'from-private-dup-index';
+
+class Foo {
+    readonly tag = 'index-class-Foo';
+}
+
+interface Box {
+    readonly slot: 'i3';
+}
+
+/** Runtime + typecheck: `Box` must stay the index-local interface after flat-bundle renames (distinct from `BoxI1` / `BoxI2`). */
+function boxI3Slot(x: Box): string {
+    return x.slot;
+}
+
+function useTypes(_a: WidgetA, _b: WidgetB, _c: BoxI1, _d: BoxI2, _e: Box): void {}
 
 export function runBundlerFixture(): string {
-    useTypes({ kind: 't1', v: 1 }, { kind: 't2', v: 'z' }, { slot: 'i1' }, { slot: 'i2' });
+    useTypes({ kind: 't1', v: 1 }, { kind: 't2', v: 'z' }, { slot: 'i1' }, { slot: 'i2' }, { slot: 'i3' });
 
     acceptsI1Box({ slot: 'i1' });
 
     const parts = [
         new FooAlpha().tag,
         new FooBeta().tag,
+        new Foo().tag,
+        boxI3Slot({ slot: 'i3' }),
         new BarAlpha().tag,
         new BarBeta().tag,
         new BazShallow().tag,
@@ -56,6 +75,9 @@ export function runBundlerFixture(): string {
         String(metricV1),
         String(metricV2),
         String(metricV3),
+        readPrivateDupA(),
+        readPrivateDupB(),
+        DUPLICATE_PRIVATE_TOP_LEVEL,
     ];
 
     return parts.join(';');

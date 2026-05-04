@@ -11,6 +11,10 @@
  * `tsc --noEmit` idea: type-check only, no JavaScript output — (3) runs ESLint on the bundle, and (4) transpiles
  * the bundle with `transpileModule` + `Module._compile` (Node, ES2020) to run `runBundlerFixture()` and assert
  * its output against `expected-bundler-fixture-joined.js` (Portal uses QuickJS; this is a best-effort runtime check).
+ *
+ * Fixture `test/src/index.ts` includes index-scoped `const` / `class` / `interface` names that collide with other
+ * modules in the graph. Step (2) catches bad **interface** or **class** renames (e.g. duplicate `Box` / `Foo`);
+ * `boxI3Slot` + `parts` assert the index-local `Box` still type-checks and returns `'i3'` at runtime after bundle.
  */
 
 const assert = require('node:assert/strict');

@@ -5,6 +5,8 @@
 module.exports = [
     'alpha-base-Foo',
     'beta-base-Foo',
+    'index-class-Foo',
+    'i3',
     'alpha-nested-Bar',
     'beta-nested-Bar',
     'gamma-models-Baz',
@@ -26,4 +28,7 @@ module.exports = [
     '1',
     '2',
     '3',
+    'from-private-dup-a',
+    'from-private-dup-b',
+    'from-private-dup-index',
 ].join(';');

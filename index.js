@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
 /**
- * Portal bundler: walk the dependency graph, resolve duplicate top-level export names and import aliases in memory,
- * strip module syntax, concatenate sources, merge strings JSON, optionally minify. Non-trivial pieces are
- * documented inline below (especially TypeScript symbol-based renames and virtual program host).
+ * Portal bundler: walk the dependency graph, resolve duplicate top-level **exported and private** binding names and
+ * import aliases in memory, strip module syntax, concatenate sources, merge strings JSON, optionally minify.
+ * Non-trivial pieces are documented inline below (especially TypeScript symbol-based renames and virtual program host).
  */
 
 const fs = require('fs');
@@ -248,37 +248,117 @@ function createProgramWithFileContents(rootNames, fileContents) {
 }
 
 /**
- * Lists **exported** symbols for duplicate counting. `default` is skipped: two `export default` values cannot be
- * disambiguated by a simple name suffix in this bundler, and Portal mods rarely rely on that pattern here.
+ * Collects top-level lexical bindings in `sourceFile` (exported or not): variables, functions, classes, interfaces,
+ * type aliases, enums, namespaces, and `import Foo = …`. Skips `import` / `export … from` (no stable local binding for
+ * the bundler) and anonymous default exports. Uses merged symbols so cross-file `namespace` merges count once.
  *
- * @param checker Unused today; kept so call sites can pass the program checker if this ever needs type-only filtering.
+ * @returns {Array<{ name: string, symbol: ts.Symbol }>}
  */
-function getExportedBindingNames(sourceFile, checker) {
+function collectTopLevelBindingEntries(sourceFile, checker) {
+    const out = [];
+    const seenMerged = new Set();
+
+    /**
+     * @param {ts.BindingName} bindingName
+     */
+    function walkBindingName(bindingName) {
+        if (ts.isIdentifier(bindingName)) {
+            pushIdentifierBinding(bindingName);
+            return;
+        }
+
+        if (ts.isObjectBindingPattern(bindingName)) {
+            for (const el of bindingName.elements) {
+                if (el.dotDotDotToken) continue;
+
+                walkBindingName(el.name);
+            }
+
+            return;
+        }
+
+        if (ts.isArrayBindingPattern(bindingName)) {
+            for (const el of bindingName.elements) {
+                if (ts.isOmittedExpression(el)) continue;
+
+                if (!ts.isBindingElement(el)) continue;
+
+                walkBindingName(el.name);
+            }
+        }
+    }
+
+    /**
+     * @param {ts.Identifier} id
+     */
+    function pushIdentifierBinding(id) {
+        const sym = checker.getSymbolAtLocation(id);
+
+        if (!sym) return;
+
+        const merged = checker.getMergedSymbol(sym);
+
+        if (seenMerged.has(merged)) return;
+
+        seenMerged.add(merged);
+        out.push({ name: id.text, symbol: merged });
+    }
+
+    for (const stmt of sourceFile.statements) {
+        if (ts.isVariableStatement(stmt)) {
+            for (const decl of stmt.declarationList.declarations) {
+                walkBindingName(decl.name);
+            }
+
+            continue;
+        }
+
+        if (
+            (ts.isFunctionDeclaration(stmt) && stmt.name) ||
+            (ts.isClassDeclaration(stmt) && stmt.name) ||
+            ts.isInterfaceDeclaration(stmt) ||
+            ts.isTypeAliasDeclaration(stmt) ||
+            ts.isEnumDeclaration(stmt) ||
+            (ts.isModuleDeclaration(stmt) && ts.isIdentifier(stmt.name) && stmt.parent === sourceFile) ||
+            (ts.isImportEqualsDeclaration(stmt) && ts.isIdentifier(stmt.name))
+        ) {
+            pushIdentifierBinding(stmt.name);
+        }
+    }
+
+    return out;
+}
+
+/**
+ * Named export keys (excluding `default`) → merged symbol, for rebuilding `declarations` after collision assignment.
+ *
+ * @returns {Map<string, ts.Symbol>}
+ */
+function getNamedExportKeyToSymbolMap(sourceFile, checker) {
+    const map = new Map();
     const mod = sourceFile.symbol;
 
-    if (!mod?.exports) return [];
+    if (!mod?.exports) return map;
 
-    const names = [];
-
-    mod.exports.forEach((_sym, esc) => {
+    mod.exports.forEach((sym, esc) => {
         const n = ts.unescapeLeadingUnderscores(esc);
 
         if (n === 'default') return;
 
-        names.push(n);
+        map.set(n, checker.getMergedSymbol(sym));
     });
 
-    return names;
+    return map;
 }
 
 /**
- * Finds every identifier that refers to the same **merged** export symbol as `exportSymbol` and renames it to
- * `newName`. Walks the whole program so importers (and merged class/namespace bodies) stay in sync.
+ * Finds every identifier that refers to the same **merged** symbol as `targetSymbol` and renames it to `newName`.
+ * Walks the whole program so importers (and merged class/namespace bodies) stay in sync.
  *
  * `getAliasedSymbol` is only used when `sym` is an Alias — calling it on non-aliases throws inside TypeScript.
  */
-function collectIdentifierRenameEdits(program, checker, exportSymbol, newName) {
-    const target = checker.getMergedSymbol(exportSymbol);
+function collectIdentifierRenameEdits(program, checker, targetSymbol, newName) {
+    const target = checker.getMergedSymbol(targetSymbol);
     const edits = [];
 
     for (const sf of program.getSourceFiles()) {
@@ -493,9 +573,10 @@ function isSuppressedModRuntimeGlobalDiagnostic(diagnostic) {
 }
 
 /**
- * Assigns unique bundle names for duplicate exported identifiers across the graph (first occurrence keeps the
- * original name; later ones get `${name}_${k}` for the k-th occurrence). Updates `fileContents` in place using
- * the TypeScript checker so references (including imports) rename correctly without naive substring replacement.
+ * Assigns unique bundle names for duplicate **top-level** identifiers (exported or private) across the graph. The first
+ * **distinct merged symbol** for a given identifier string keeps `name`; further symbols with the same spelling get
+ * `name_2`, `name_3`, … — except symbols that already **merge** across files (e.g. `namespace`), which share one bundle
+ * name. Updates `fileContents` in place via the TypeScript checker so references (including imports) rename correctly.
  *
  * @returns {{ declarationCounts: Map<string, number>, declarations: Map<string, Map<string, string>> }}
  */
@@ -507,6 +588,7 @@ function handleDuplicateDeclarations(buildOrder, fileContents) {
     const program = createProgramWithFileContents(paths, fileContents);
     const checker = program.getTypeChecker();
     const diags = ts.getPreEmitDiagnostics(program);
+
     const errors = diags
         .filter((d) => d.category === ts.DiagnosticCategory.Error)
         .filter((d) => !isSuppressedModRuntimeGlobalDiagnostic(d));
@@ -514,7 +596,7 @@ function handleDuplicateDeclarations(buildOrder, fileContents) {
     // Remaining errors (e.g. syntax, broken imports) may still affect rename fidelity — warn with a short sample.
     if (errors.length > 0) {
         console.warn(
-            '⚠️  TypeScript reported errors while analyzing modules for duplicate exports; rename accuracy may suffer.'
+            '⚠️  TypeScript reported errors while analyzing modules for duplicate top-level bindings; rename accuracy may suffer.'
         );
 
         for (const d of errors.slice(0, 8)) {
@@ -524,20 +606,50 @@ function handleDuplicateDeclarations(buildOrder, fileContents) {
         }
     }
 
-    // Assign bundle names in `buildOrder`: first time an export name appears it keeps `name`; k-th file adds `name_k`.
+    const symbolToBundleName = new Map();
+    const firstSymbolForName = new Map();
+    const nameDistinctCount = new Map();
+
     for (const fp of paths) {
         const sf = program.getSourceFile(fp);
 
         if (!sf || sf.isDeclarationFile) continue;
 
-        const names = getExportedBindingNames(sf, checker);
-        const inner = new Map();
+        const entries = collectTopLevelBindingEntries(sf, checker);
 
-        for (const name of names) {
-            const count = (declarationCounts.get(name) ?? 0) + 1;
-            declarationCounts.set(name, count);
-            const bundleName = count === 1 ? name : `${name}_${count}`;
-            inner.set(name, bundleName);
+        for (const { name, symbol: merged } of entries) {
+            if (symbolToBundleName.has(merged)) continue;
+
+            if (!firstSymbolForName.has(name)) {
+                firstSymbolForName.set(name, merged);
+                symbolToBundleName.set(merged, name);
+                nameDistinctCount.set(name, 1);
+            } else {
+                const next = (nameDistinctCount.get(name) ?? 1) + 1;
+
+                nameDistinctCount.set(name, next);
+                symbolToBundleName.set(merged, `${name}_${next}`);
+            }
+        }
+    }
+
+    for (const [name, count] of nameDistinctCount) {
+        declarationCounts.set(name, count);
+    }
+
+    for (const fp of paths) {
+        const sf = program.getSourceFile(fp);
+
+        if (!sf || sf.isDeclarationFile) continue;
+
+        const inner = new Map();
+        const named = getNamedExportKeyToSymbolMap(sf, checker);
+
+        for (const [exportKey, sym] of named) {
+            const merged = checker.getMergedSymbol(sym);
+            const bundle = symbolToBundleName.get(merged) ?? exportKey;
+
+            inner.set(exportKey, bundle);
         }
 
         declarations.set(fp, inner);
@@ -545,26 +657,12 @@ function handleDuplicateDeclarations(buildOrder, fileContents) {
 
     const allEdits = [];
 
-    // Only files that actually renamed an export need AST edits; identity mappings skip (no checker work).
-    for (const fp of paths) {
-        const sf = program.getSourceFile(fp);
+    for (const merged of symbolToBundleName.keys()) {
+        const bundleName = symbolToBundleName.get(merged);
 
-        if (!sf?.symbol?.exports) continue;
+        if (bundleName === undefined) continue;
 
-        const inner = declarations.get(fp);
-
-        if (!inner) continue;
-
-        for (const [origName, bundleName] of inner) {
-            if (origName === bundleName) continue;
-
-            const escaped = ts.escapeLeadingUnderscores(origName);
-            const exportSym = sf.symbol.exports.get(escaped);
-
-            if (!exportSym) continue;
-
-            allEdits.push(...collectIdentifierRenameEdits(program, checker, exportSym, bundleName));
-        }
+        allEdits.push(...collectIdentifierRenameEdits(program, checker, merged, bundleName));
     }
 
     const editsByFile = new Map();
@@ -668,10 +766,12 @@ async function build() {
     const duplicateExportNames = [...declarationCounts.entries()].filter(([, c]) => c > 1);
 
     if (duplicateExportNames.length > 0) {
-        console.log('🔀 Resolved duplicate top-level export names (2nd+ occurrences suffixed as name_2, name_3, …):');
+        console.log(
+            '🔀 Resolved duplicate top-level identifiers — exports and private bindings (2nd+ distinct symbols suffixed as name_2, name_3, …):'
+        );
 
         for (const [name, c] of duplicateExportNames) {
-            console.log(`   "${name}" in ${c} file(s)`);
+            console.log(`   "${name}" — ${c} distinct symbol(s)`);
         }
     }
 
